@@ -21,11 +21,10 @@ from columnflow.tasks.framework.plotting import (
 from columnflow.tasks.framework.decorators import view_output_plots
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.histograms import MergeHistograms, MergeShiftedHistograms
-from columnflow.tasks.data_driven_methods import DataDrivenEstimation
 from columnflow.util import DotDict, dev_sandbox, dict_add_strict
 
 
-class PlotVariablesBase(
+class DataDrivenEstimationBase(
     VariablePlotSettingMixin,
     ProcessPlotSettingMixin,
     CategoriesMixin,
@@ -47,7 +46,6 @@ class PlotVariablesBase(
     reqs = Requirements(
         RemoteWorkflow.reqs,
         MergeHistograms=MergeHistograms,
-        
     )
     """Set upstream requirements, in this case :py:class:`~columnflow.tasks.histograms.MergeHistograms`
     """
@@ -66,6 +64,7 @@ class PlotVariablesBase(
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
+
         reqs["merged_hists"] = self.requires_from_branch()
 
         return reqs
@@ -73,11 +72,12 @@ class PlotVariablesBase(
     @abstractmethod
     def get_plot_shifts(self):
         return
-
+    
     @law.decorator.log
     @view_output_plots
     def run(self):
         import hist
+        import numpy as np
         from cmsdb.processes.qcd import qcd
 
         # get the shifts to extract and plot
@@ -99,16 +99,12 @@ class PlotVariablesBase(
 
         # histogram data per process
         hists = {}
-
-        with self.publish_step(f"plotting {self.branch_data.variable} in {category_inst.name}"):
-            qcd_hist_inp = self.input()['qcd_hists']
-            #from IPython import embed; embed()
-            qcd_hist = qcd_hist_inp["collection"][0]['qcd_hists'].targets[self.branch_data.variable].load(formatter="pickle")
-            for dataset, inp in self.input().items():
-                if dataset != 'qcd_hists':
+        if category_inst.name == 'cat_c':
+            with self.publish_step(f"estimating qcd for {self.branch_data.variable} in {category_inst.name}"):
+                for dataset, inp in self.input().items():
                     dataset_inst = self.config_inst.get_dataset(dataset)
                     h_in = inp["collection"][0]["hists"].targets[self.branch_data.variable].load(formatter="pickle")
-                    
+
                     # loop and extract one histogram per process
                     for process_inst in process_insts:
                         # skip when the dataset is already known to not contain any sub process
@@ -145,46 +141,66 @@ class PlotVariablesBase(
                             hists[process_inst] += h
                         else:
                             hists[process_inst] = h
-            # there should be hists to plot
-            if not hists:
-                raise Exception(
-                    "no histograms found to plot; possible reasons:\n" +
-                    "  - requested variable requires columns that were missing during histogramming\n" +
-                    "  - selected --processes did not match any value on the process axis of the input histogram",
+
+                # there should be hists to plot
+                if not hists:
+                    raise Exception(
+                        "no histograms found to plot; possible reasons:\n" +
+                        "  - requested variable requires columns that were missing during histogramming\n" +
+                        "  - selected --processes did not match any value on the process axis of the input histogram",
+                    )
+
+                # sort hists by process order
+                hists = OrderedDict(
+                    (process_inst.copy_shallow(), hists[process_inst])
+                    for process_inst in sorted(hists, key=process_insts.index)
                 )
-            # sort hists by process order
-            hists = OrderedDict(
-                (process_inst.copy_shallow(), hists[process_inst])
-                for process_inst in sorted(hists, key=process_insts.index)
-            )
-            hists[qcd] = qcd_hist
+                
+                qcd_hist = None
+                qcd_hist_values = None
+                for process_inst, h in hists.items():
+                    hist_np , _ , _ = h.to_numpy(flow=True)
+                    if qcd_hist is None:
+                        qcd_hist = h.copy()
+                        qcd_hist_values = np.zeros_like(hist_np)
+                    if process_inst.is_data: qcd_hist_values += hist_np
+                    else: qcd_hist_values -= hist_np
+                
+                #if the array contains negative values, set them to zero
+                qcd_hist_values = np.where(qcd_hist_values > 0, qcd_hist_values, 0)
+                qcd_hist.view(flow=True).value[:] = qcd_hist_values
+                qcd_hist.view(flow=True).variance[:] = np.zeros_like(qcd_hist_values)
+                qcd_hist
+                #register a new datased at the hlist
+                hists[qcd] = qcd_hist
+                #save qcd estimation histogram and plots only for control region
+                
+                self.output()["qcd_hists"][self.branch_data.variable].dump(qcd_hist, formatter="pickle")
+                # call the plot function
+                fig, _ = self.call_plot_func(
+                    self.plot_function,
+                    hists=hists,
+                    config_inst=self.config_inst,
+                    category_inst=category_inst.copy_shallow(),
+                    variable_insts=[var_inst.copy_shallow() for var_inst in variable_insts],
+                    **self.get_plot_parameters(),
+                )
 
-            # call the plot function
-            fig, _ = self.call_plot_func(
-                self.plot_function,
-                hists=hists,
-                config_inst=self.config_inst,
-                category_inst=category_inst.copy_shallow(),
-                variable_insts=[var_inst.copy_shallow() for var_inst in variable_insts],
-                **self.get_plot_parameters(),
-            )
-
-            # save the plot
-            for outp in self.output()["plots"]:
-                outp.dump(fig, formatter="mpl")
+                # save the plot
+                for outp in self.output()["plots"]:
+                    outp.dump(fig, formatter="mpl")
 
 
-class PlotVariablesBaseSingleShift(
-    PlotVariablesBase,
+class DataDrivenEstimationSingleShift(
+    DataDrivenEstimationBase,
     ShiftTask,
 ):
     exclude_index = True
 
     # upstream requirements
     reqs = Requirements(
-        PlotVariablesBase.reqs,
+        DataDrivenEstimationBase.reqs,
         MergeHistograms=MergeHistograms,
-        DataDrivenEstimation=DataDrivenEstimation,
     )
 
     def create_branch_map(self):
@@ -195,99 +211,8 @@ class PlotVariablesBaseSingleShift(
         ]
 
     def requires(self):
-        
-        reqs = {
+        return {
             d: self.reqs.MergeHistograms.req(
-                self,
-                dataset=d,
-                branch=-1,
-                _exclude={"branches"},
-                _prefer_cli={"variables"},
-            )
-            for d in self.datasets}
-        
-        reqs["qcd_hists"] = self.reqs.DataDrivenEstimation.req(self, branch=-1, categories={'cat_c'})
-        return reqs
-   
-               
-
-    def output(self):
-        b = self.branch_data
-        return {"plots": [
-            self.target(name)
-            for name in self.get_plot_names(f"plot__proc_{self.processes_repr}__cat_{b.category}__var_{b.variable}")
-        ]}
-
-    def get_plot_shifts(self):
-        return [self.global_shift_inst]
-
-
-class PlotVariables1D(
-    PlotVariablesBaseSingleShift,
-    PlotBase1D,
-):
-    plot_function = PlotBase.plot_function.copy(
-        default="columnflow.plotting.plot_functions_1d.plot_variable_per_process",
-        add_default_to_description=True,
-    )
-
-
-class PlotVariables2D(
-    PlotVariablesBaseSingleShift,
-    PlotBase2D,
-):
-    plot_function = PlotBase.plot_function.copy(
-        default="columnflow.plotting.plot_functions_2d.plot_2d",
-        add_default_to_description=True,
-    )
-
-
-class PlotVariablesPerProcess2D(
-    law.WrapperTask,
-    PlotVariables2D,
-):
-    # force this one to be a local workflow
-    workflow = "local"
-
-    def requires(self):
-        return {
-            process: PlotVariables2D.req(self, processes=(process,))
-            for process in self.processes
-        }
-
-
-class PlotVariablesBaseMultiShifts(
-    PlotVariablesBase,
-    ShiftSourcesMixin,
-):
-    legend_title = luigi.Parameter(
-        default=law.NO_STR,
-        significant=False,
-        description="sets the title of the legend; when empty and only one process is present in "
-        "the plot, the process_inst label is used; empty default",
-    )
-    """
-    """
-
-    exclude_index = True
-
-    # upstream requirements
-    reqs = Requirements(
-        PlotVariablesBase.reqs,
-        MergeShiftedHistograms=MergeShiftedHistograms,
-    )
-
-    def create_branch_map(self):
-        return [
-            DotDict({"category": cat_name, "variable": var_name, "shift_source": source})
-            for var_name in sorted(self.variables)
-            for cat_name in sorted(self.categories)
-            for source in sorted(self.shift_sources)
-        ]
-
-    def requires(self):
-        return {
-            d: self.reqs.MergeShiftedHistograms.req(
                 self,
                 dataset=d,
                 branch=-1,
@@ -301,52 +226,22 @@ class PlotVariablesBaseMultiShifts(
         b = self.branch_data
         return {"plots": [
             self.target(name)
-            for name in self.get_plot_names(
-                f"plot__proc_{self.processes_repr}__unc_{b.shift_source}__cat_{b.category}__var_{b.variable}",
-            )
-        ]}
+            for name in self.get_plot_names(f"plot__proc_{self.processes_repr}__cat_{b.category}__var_{b.variable}")
+        ],
+        "qcd_hists": law.SiblingFileCollection({
+            variable_name: self.target(f"qcd_histogram__{b.category}_{variable_name}.pickle")
+            for variable_name in self.variables
+        })}
 
     def get_plot_shifts(self):
-        return [
-            self.config_inst.get_shift(s) for s in [
-                "nominal",
-                f"{self.branch_data.shift_source}_up",
-                f"{self.branch_data.shift_source}_down",
-            ]
-        ]
-
-    def get_plot_parameters(self):
-        # convert parameters to usable values during plotting
-        params = super().get_plot_parameters()
-        dict_add_strict(params, "legend_title", None if self.legend_title == law.NO_STR else self.legend_title)
-        return params
+        return [self.global_shift_inst]
 
 
-class PlotShiftedVariables1D(
-    PlotBase1D,
-    PlotVariablesBaseMultiShifts,
+class DataDrivenEstimation(
+    DataDrivenEstimationSingleShift,
+    DataDrivenEstimationBase,
 ):
     plot_function = PlotBase.plot_function.copy(
-        default="columnflow.plotting.plot_functions_1d.plot_shifted_variable",
+        default="columnflow.plotting.plot_functions_1d.plot_variable_per_process",
         add_default_to_description=True,
     )
-
-
-class PlotShiftedVariablesPerProcess1D(
-    law.WrapperTask,
-    PlotShiftedVariables1D,
-):
-    # force this one to be a local workflow
-    workflow = "local"
-
-    # upstream requirements
-    reqs = Requirements(
-        PlotShiftedVariables1D.reqs,
-        PlotShiftedVariables1D=PlotShiftedVariables1D,
-    )
-
-    def requires(self):
-        return {
-            process: self.reqs.PlotShiftedVariables1D.req(self, processes=(process,))
-            for process in self.processes
-        }
