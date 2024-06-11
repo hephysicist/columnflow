@@ -28,12 +28,13 @@ def normalization_weights(self: Producer, events: ak.Array, **kwargs) -> ak.Arra
     py:attr:`selection_stats` attribute to assign each event a normalization weight.
     """
     # add process ids
-    events = self[process_ids](events, **kwargs)
+    #events = self[process_ids](events, **kwargs)
 
     # get the lumi
     lumi = self.config_inst.x.luminosity.nominal
 
     # read the cross section per process from the lookup table
+    processes = self.dataset_inst.processes.names()
     process_id = np.asarray(events.process_id)
     xs = np.array(self.xs_table[0, process_id].todense())[0]
 

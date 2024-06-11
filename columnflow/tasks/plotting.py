@@ -12,7 +12,7 @@ import luigi
 
 from columnflow.tasks.framework.base import Requirements, ShiftTask
 from columnflow.tasks.framework.mixins import (
-    CalibratorsMixin, SelectorStepsMixin, ProducersMixin, MLModelsMixin,
+    CalibratorsMixin, SelectorStepsMixin, ProducersMixin, MLModelsMixin, WeightProducerMixin,
     CategoriesMixin, ShiftSourcesMixin,
 )
 from columnflow.tasks.framework.plotting import (
@@ -30,6 +30,7 @@ class PlotVariablesBase(
     ProcessPlotSettingMixin,
     CategoriesMixin,
     MLModelsMixin,
+    WeightProducerMixin,
     ProducersMixin,
     SelectorStepsMixin,
     CalibratorsMixin,
@@ -54,7 +55,7 @@ class PlotVariablesBase(
 
     def store_parts(self):
         parts = super().store_parts()
-        parts.insert_before("version", "plot", f"datasets_{self.datasets_repr}")
+        parts.insert_before("version", "datasets", f"datasets_{self.datasets_repr}")
         return parts
 
     def create_branch_map(self):
@@ -213,10 +214,18 @@ class PlotVariablesBaseSingleShift(
 
     def output(self):
         b = self.branch_data
-        return {"plots": [
-            self.target(name)
-            for name in self.get_plot_names(f"plot__proc_{self.processes_repr}__cat_{b.category}__var_{b.variable}")
-        ]}
+        return {
+            "plots": [
+                self.target(name)
+                for name in self.get_plot_names(f"plot__proc_{self.processes_repr}__cat_{b.category}__var_{b.variable}")
+            ],
+        }
+
+    def store_parts(self):
+        parts = super().store_parts()
+        if "shift" in parts:
+            parts.insert_before("datasets", "shift", parts.pop("shift"))
+        return parts
 
     def get_plot_shifts(self):
         return [self.global_shift_inst]
@@ -299,12 +308,19 @@ class PlotVariablesBaseMultiShifts(
 
     def output(self):
         b = self.branch_data
-        return {"plots": [
-            self.target(name)
-            for name in self.get_plot_names(
-                f"plot__proc_{self.processes_repr}__unc_{b.shift_source}__cat_{b.category}__var_{b.variable}",
-            )
-        ]}
+        return {
+            "plots": [
+                self.target(name)
+                for name in self.get_plot_names(
+                    f"plot__proc_{self.processes_repr}__unc_{b.shift_source}__cat_{b.category}__var_{b.variable}",
+                )
+            ],
+        }
+
+    def store_parts(self):
+        parts = super().store_parts()
+        parts.insert_before("datasets", "shifts", f"shifts_{self.shift_sources_repr}")
+        return parts
 
     def get_plot_shifts(self):
         return [
