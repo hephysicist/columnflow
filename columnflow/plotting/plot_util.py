@@ -197,6 +197,7 @@ def prepare_style_config(
         "cms_label_cfg": {
             "lumi": config_inst.x.luminosity.get("nominal") / 1000,  # pb -> fb
             "com": config_inst.campaign.ecm,
+            "year" : config_inst.campaign.x.year
         },
     }
 

@@ -285,7 +285,8 @@ def plot_cutflow(
         "annotate_cfg": {"text": category_inst.label},
         "cms_label_cfg": {
             "lumi": config_inst.x.luminosity.get("nominal") / 1000,  # pb -> fb
-            "com": config_inst.campaign.ecm,
+            "com" : config_inst.campaign.ecm,
+            "year": config_inst.campaign.x.year
         },
     }
     style_config = law.util.merge_dicts(default_style_config, style_config, deep=True)
@@ -295,6 +296,6 @@ def plot_cutflow(
 
     fig, (ax,) = plot_all(plot_config, style_config, **kwargs)
 
-    ax.set_xticklabels(xticklabels, rotation=45, ha="right")
+    #sax.set_xticklabels(xticklabels, rotation=45, ha="right")
 
     return fig, (ax,)
