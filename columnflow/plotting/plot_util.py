@@ -679,7 +679,7 @@ def split_ax_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
     other_keys = {
         "xmajorticks", "xminorticks", "xmajorticklabels", "xminorticklabels", "xloc", "xrotation",
         "ymajorticks", "yminorticks", "yloc", "yrotation", "xticklabelformat", "yticklabelformat",
-        "xoffsettext", "yoffsettext",
+        "xoffsettext", "yoffsettext","grid"
     }
     for key, value in kwargs.items():
         (other_kwargs if key in other_keys else set_kwargs)[key] = value
@@ -726,7 +726,8 @@ def apply_ax_kwargs(ax: plt.Axes, kwargs: dict[str, Any]) -> None:
         ax.xaxis.get_offset_text().set(**other_kwargs["xoffsettext"])
     if other_kwargs.get("yoffsettext") is not None:
         ax.yaxis.get_offset_text().set(**other_kwargs["yoffsettext"])
-
+    if other_kwargs.get("grid") is not None:
+        ax.grid(**other_kwargs.get("grid"))
 
 def get_position(minimum: float, maximum: float, factor: float = 1.4, logscale: bool = False) -> float:
     """ get a relative position between a min and max value based on the scale """
