@@ -193,7 +193,7 @@ class PlotVariablesBase(_PlotVariablesBase):
                 for i, (config, dataset_dict) in enumerate(inputs.items()):
                     config_inst = self.config_insts[i]
                     category_inst = config_inst.get_category(self.branch_data.category)
-
+                    leaf_category_insts = category_inst.get_leaf_categories() or [category_inst]
                     hists_config = {}
 
                     for dataset, inps in dataset_dict.items():
@@ -209,7 +209,6 @@ class PlotVariablesBase(_PlotVariablesBase):
                         for process_inst, process_info in config_process_map[config_inst].items():
                             if dataset_inst not in process_info["dataset_proc_name_map"].keys():
                                 continue
-
                             # select processes and reduce axis
                             h = h_in[{
                                 "process": [
@@ -219,10 +218,6 @@ class PlotVariablesBase(_PlotVariablesBase):
                                 ],
                             }]
                             h = h[{"process": sum}]
-
-                            # create expected shift bins and fill them with the nominal histogram
-                            expected_shifts = plot_shift_names & process_shift_map[process_inst.name]
-                            add_missing_shifts(h, expected_shifts, str_axis="shift", nominal_bin="nominal")
 
                             # add the histogram
                             if process_inst in hists_config:
@@ -258,7 +253,6 @@ class PlotVariablesBase(_PlotVariablesBase):
                         "variable_name": var_name,
                     },
                 )
-
                 # merge configs
                 if len(self.config_insts) != 1:
                     process_memory = {}
@@ -284,13 +278,27 @@ class PlotVariablesBase(_PlotVariablesBase):
                         if process_inst.name in process_shift_map
                         else {"nominal"}
                     )
-                    expected_shifts = (process_shifts & plot_shift_names) or (process_shifts & {"nominal"})
+                    expected_shifts = plot_shift_names
                     if not expected_shifts:
                         raise Exception(f"no shifts to plot found for process {process_inst.name}")
-                    # select shifts
-                    h = h[{"shift": [hist.loc(s_name) for s_name in expected_shifts if s_name in h.axes["shift"]]}]
-                    # select and reduce categories
-                    h = select_category_bins(h, category_inst, use_leaves=True, prefer_parents=True, reduce=True)
+                    
+                    add_missing_shifts(h, expected_shifts, str_axis="shift", nominal_bin="nominal")
+                    
+                    # selections
+                    h = h[{
+                        "category": [
+                            hist.loc(c.name)
+                            for c in leaf_category_insts
+                            if c.name in h.axes["category"]
+                        ],
+                        "shift": [
+                            hist.loc(s_name)
+                            for s_name in expected_shifts
+                            if s_name in h.axes["shift"]
+                        ],
+                    }]
+                    # reductions
+                    h = h[{"category": sum}]
                     # store
                     _hists[process_inst] = h
                 hists[var_name] = _hists
@@ -517,14 +525,17 @@ class PlotVariablesBaseMultiShifts(
 
     def requires(self):
         reqs = {}
+        req_cls = lambda dataset_name: (
+            self.reqs.MergeShiftedHistograms
+        )
 
         if self.is_branch() and self.bypass_branch_requirements:
             return reqs
 
         def hist_req(config_inst, dataset_name, **kwargs):
             # return simple merged histograms for data
-            if config_inst.get_dataset(dataset_name).is_data:
-                return self.reqs.MergeHistograms.req(self, **kwargs)
+            #if config_inst.get_dataset(dataset_name).is_data:
+            #    return self.reqs.MergeHistograms.req(self, **kwargs)
             # for mc, return shifted histograms
             return self.reqs.MergeShiftedHistograms.req(self, **kwargs)
 

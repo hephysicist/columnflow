@@ -538,7 +538,6 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
             # add nominal and both directions per shift source
             for shift in expand_shift_sources(self.shift_sources):
                 reqs[shift] = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
-
         return reqs
 
     def requires(self):

@@ -1797,8 +1797,9 @@ class DatasetTask(ShiftTask):
         if (dataset_inst := params.get("dataset_inst")):
             if dataset_inst.is_data:
                 # clear all shifts for data
-                shifts.local.clear()
-                shifts.upstream.clear()
+                #shifts.local.clear()
+                #shifts.upstream.clear()
+                pass
             else:
                 # extend with dataset variations for mc
                 shifts.upstream |= set(dataset_inst.info.keys())

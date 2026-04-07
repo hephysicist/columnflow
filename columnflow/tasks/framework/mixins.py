@@ -2423,8 +2423,8 @@ class DatasetsProcessesMixin(ConfigTask):
         # add shifts of all datasets to upstream ones
         for config_inst, dataset_insts in params["dataset_insts"].items():
             for dataset_inst in dataset_insts:
-                if dataset_inst.is_mc:
-                    shifts.upstream |= set(dataset_inst.info.keys())
+                #if dataset_inst.is_mc:
+                shifts.upstream |= set(dataset_inst.info.keys())
 
         super().get_known_shifts(params, shifts)
 

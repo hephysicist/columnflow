@@ -23,6 +23,8 @@ from columnflow.plotting.plot_util import (
 from columnflow.types import TYPE_CHECKING, Sequence
 
 np = maybe_import("numpy")
+hist = maybe_import("hist")
+plt = maybe_import("matplotlib.pyplot")
 if TYPE_CHECKING:
     hist = maybe_import("hist")
     plt = maybe_import("matplotlib.pyplot")
@@ -59,9 +61,111 @@ def draw_stat_error_bands(
         **kwargs,
     }
     ax.bar(**bar_kwargs)
-
-
+    
 def draw_syst_error_bands(
+    ax: plt.Axes,
+    h: hist.Hist,
+    syst_hists: Sequence[hist.Hist],
+    shift_insts: Sequence[od.Shift],
+    norm: float | Sequence | np.ndarray = 1.0,
+    method: str = "quadratic_sum",
+    **kwargs,
+) -> None:
+    assert len(h.axes) == 1
+    assert method in ("quadratic_sum", "envelope")
+    nominal_shift, shift_groups = group_shifts(shift_insts)
+    if nominal_shift is None:
+        raise ValueError("no nominal shift found in the list of shift instances")
+    # create pairs of shifts mapping from up -> down and vice versa
+    shift_pairs = {}
+    for up_shift, down_shift in shift_groups.values():
+        shift_pairs[up_shift] = down_shift
+        shift_pairs[down_shift] = up_shift
+    # stack histograms separately per shift, falling back to the nominal one when missing
+    shift_stacks: dict[od.Shift, hist.Hist] = {}
+    for shift_inst in sum(shift_groups.values(), []):
+        for _h in syst_hists:
+            # when the shift is present, the flipped shift must exist as well
+            shift_ax = _h.axes["shift"]
+            if shift_inst.name in shift_ax:
+                if shift_pairs[shift_inst].name not in shift_ax:
+                    raise RuntimeError(
+                        f"shift {shift_inst} found in histogram but {shift_pairs[shift_inst]} is missing; "
+                        f"existing shifts: {','.join(map(str, list(shift_ax)))}",
+                    )
+                shift_name = shift_inst.name
+            else:
+                shift_name = nominal_shift.name
+            # store the slice
+            _h = _h[{"shift": hist.loc(shift_name)}]
+            if shift_inst not in shift_stacks:
+                shift_stacks[shift_inst] = _h
+            else:
+                shift_stacks[shift_inst] += _h
+
+    # loop over bins, subtract nominal yields from stacked yields and merge differences into
+    # a systematic error per bin using the given method (quadratic sum vs. evelope)
+    # note 1: if the up/down variations of the same shift source point in the same direction, a
+    #         statistical combination is pointless and their minimum/maximum is selected instead
+    # note 2: relative signs are consumed into the meaning of "up" and "down" here as they already
+    #         are combinations evaluated for a specific direction
+    syst_error_up = []
+    syst_error_down = []
+    for b in range(h.axes[0].size):
+        up_diffs = []
+        down_diffs = []
+        for source, (down_shift, up_shift) in shift_groups.items():
+            # get actual differences resulting from this shift
+            shift_up_diff = shift_stacks[up_shift].values()[b] - h.values()[b]
+            shift_down_diff = shift_stacks[down_shift].values()[b] - h.values()[b]
+            # store them depending on whether they really increase or decrease the yield
+            if (shift_up_diff < 0 ) and (shift_down_diff < 0):
+                up_diffs.append(min(shift_up_diff, shift_down_diff))
+            else:
+                up_diffs.append(max(shift_up_diff, shift_down_diff, 0))
+            if (shift_up_diff > 0 ) and (shift_down_diff > 0):
+                down_diffs.append(max(shift_up_diff, shift_down_diff))
+            else:
+                down_diffs.append(min(shift_up_diff, shift_down_diff, 0))
+        # combination based on the method
+        if method == "quadratic_sum":
+            up_diff = sum(d**2 for d in up_diffs)**0.5
+            down_diff = sum(d**2 for d in down_diffs)**0.5
+        else:  # envelope
+            up_diff = max(up_diffs)
+            down_diff = min(down_diffs)
+        # save values
+        syst_error_up.append(up_diff)
+        syst_error_down.append(down_diff)
+    # compute relative systematic errors
+    rel_syst_error_up = np.array(syst_error_up) / h.values()
+    rel_syst_error_up[np.isnan(rel_syst_error_up)] = 0.0
+    rel_syst_error_down = np.array(syst_error_down) / h.values()
+    rel_syst_error_down[np.isnan(rel_syst_error_down)] = 0.0
+
+    # compute the baseline
+    # fill 1 in places where both numerator and denominator are 0, and 0 for remaining nan's
+    baseline = h.values() / norm
+    baseline[(h.values() == 0) & (norm == 0)] = 1.0
+    baseline[np.isnan(baseline)] = 0.0
+
+    bar_kwargs = {
+        "x": h.axes[0].centers,
+        "bottom": baseline * (1 - rel_syst_error_down),
+        "height": baseline * (rel_syst_error_up + rel_syst_error_down),
+        "width": h.axes[0].edges[1:] - h.axes[0].edges[:-1],
+        "hatch": "\\\\\\",
+        "linewidth": 0,
+        "color": "none",
+        "edgecolor": "#30c300",
+        "alpha": 1.0,
+        **kwargs,
+    }
+    ax.bar(**bar_kwargs)
+
+
+
+def _draw_syst_error_bands(
     ax: plt.Axes,
     h: hist.Hist,
     syst_hists: Sequence[hist.Hist],
@@ -78,7 +182,7 @@ def draw_syst_error_bands(
     nominal_shift, shift_groups = group_shifts(shift_insts)
     if nominal_shift is None:
         raise ValueError("no nominal shift found in the list of shift instances")
-
+    
     # create pairs of shifts mapping from up -> down and vice versa
     shift_pairs = {}
     shift_pairs[nominal_shift] = nominal_shift  # nominal shift maps to itself
@@ -444,7 +548,7 @@ def plot_all(
 
         # apply axis kwargs
         apply_ax_kwargs(rax, rax_kwargs)
-
+        
         # remove x-label from main axis
         if "xlabel" in rax_kwargs:
             ax.set_xlabel("")
